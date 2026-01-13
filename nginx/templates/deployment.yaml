@@ -4,6 +4,10 @@ metadata:
   name: {{ include "nginx.fullname" . }}
   labels:
     {{- include "nginx.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.reloader.enabled }}
+    reloader.stakater.com/match: "true"
+    {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}

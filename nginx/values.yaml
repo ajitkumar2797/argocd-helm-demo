@@ -162,4 +162,6 @@ affinity: {}
 app:
   mode: dev
   greeting: "Hello from Helm ConfigMap!"
+reloader:
+  enabled: true  # set to false to disable reloader annotation
 

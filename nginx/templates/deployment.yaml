@@ -6,7 +6,7 @@ metadata:
     {{- include "nginx.labels" . | nindent 4 }}
   annotations:
     {{- if .Values.reloader.enabled }}
-    reloader.stakater.com/match: "true"
+    reloader.stakater.com/auto: "true"
     {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}

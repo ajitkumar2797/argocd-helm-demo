@@ -161,7 +161,7 @@ tolerations: []
 affinity: {}
 app:
   mode: dev
-  greeting: "Hello from Helm ConfigMap! V1.0"
+  greeting: "Hello from Helm ConfigMap! V1.0.0"
 reloader:
   enabled: true  # set to false to disable reloader annotation
 

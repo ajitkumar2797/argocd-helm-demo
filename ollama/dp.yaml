@@ -1,0 +1,47 @@
+# pvc-ollama.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: ai-ops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ai-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models-pvc
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          volumeMounts:
+          - name: models
+            mountPath: /root/.ollama
+          ports:
+            - containerPort: 11434
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1"
+
+

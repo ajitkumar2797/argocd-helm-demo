@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-log-analyzer
+  namespace: ai-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-log-analyzer
+  template:
+    metadata:
+      labels:
+        app: ai-log-analyzer
+    spec:
+      serviceAccountName: ai-log-analyzer
+      containers:
+        - name: ai
+          image: ai-log-analyzer:v3.5
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-log-analyzer
+  namespace: ai-ops
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-log-analyzer
+rules:
+  # Pods and logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "namespaces"]
+    verbs: ["get", "list"]
+
+  # Deployments and replicasets
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-log-analyzer
+subjects:
+  - kind: ServiceAccount
+    name: ai-log-analyzer
+    namespace: ai-ops
+roleRef:
+  kind: ClusterRole
+  name: ai-log-analyzer
+  apiGroup: rbac.authorization.k8s.io

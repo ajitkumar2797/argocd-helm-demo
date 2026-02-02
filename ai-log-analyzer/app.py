@@ -16,7 +16,8 @@ except config.ConfigException:
 
 v1 = client.CoreV1Api()
 
-OLLAMA_URL = "http://ollama.ai-ops.svc.cluster.local:11434/api/generate"
+# OLLAMA_URL = "http://ollama.ai-ops.svc.cluster.local:11434/api/generate"
+OLLAMA_URL = "http://host.minikube.internal:11434/api/generate"
 
 HTML = """
 <!DOCTYPE html>
@@ -63,9 +64,9 @@ HTML = """
         }
         .nav-content {
             width: 100%;
-            max-width: 800px;
+            max-width: 1000px;
             margin: 0 auto;
-            padding: 0 1rem;
+            padding: 0 1.5rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -100,8 +101,8 @@ HTML = """
         /* Main Workspace */
         main {
             width: 100%;
-            max-width: 800px;
-            padding: 0 1rem 3rem 1rem;
+            max-width: 1000px;
+            padding: 0 1.5rem 3rem 1.5rem;
             flex: 1;
             display: flex;
             flex-direction: column;
@@ -292,9 +293,25 @@ HTML = """
                             <option value="">Select Namespace</option>
                         </select>
                     </div>
+
+                    <div class="form-group">
+                        <label for="resource-type">Resource Type</label>
+                        <select id="resource-type" disabled>
+                            <option value="Pod">Pod</option>
+                            <option value="Deployment">Deployment</option>
+                            <option value="StatefulSet">StatefulSet</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="controller-group" style="display:none;">
+                        <label for="controller-name">Workload Name</label>
+                         <select id="controller-name">
+                            <option value="">Select Workload</option>
+                        </select>
+                    </div>
                     
                     <div class="form-group">
-                        <label for="pod">Pod</label>
+                        <label for="pod">Target Pod</label>
                         <select id="pod" disabled>
                             <option value="">Select Pod</option>
                         </select>
@@ -309,6 +326,23 @@ HTML = """
         </div>
 
         <div id="result-area"></div>
+
+        <!-- Interactive Chat Section -->
+        <div id="chat-section" style="display:none; margin-top: 2rem;">
+            <div class="card" style="padding: 1.5rem;">
+                <h3 style="margin-top:0; color:var(--text-main); display:flex; align-items:center; gap:0.5rem;">
+                    💬 AI SRE Assistant
+                    <span style="font-size:0.8rem; font-weight:normal; color:var(--text-muted);">(Ask follow-up questions)</span>
+                </h3>
+                <div id="chat-history" style="max-height: 300px; overflow-y: auto; margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; background: #f8fafc;">
+                    <!-- Chat messages go here -->
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="chat-input" placeholder="e.g. 'Write a Helm patch for this' or 'Explain to a junior dev'" style="flex:1; padding: 0.75rem; border: 1px solid var(--border); border-radius: 0.5rem;">
+                    <button id="send-chat-btn" class="btn-primary" style="width: auto; margin-top:0;">Send</button>
+                </div>
+            </div>
+        </div>
     </main>
 
     <footer>
@@ -320,17 +354,29 @@ HTML = """
 
     <script>
         const nsSelect = document.getElementById('namespace');
+        const typeSelect = document.getElementById('resource-type');
+        const ctrlGroup = document.getElementById('controller-group');
+        const ctrlSelect = document.getElementById('controller-name');
         const podSelect = document.getElementById('pod');
+        
         const analyzeBtn = document.getElementById('analyze-btn');
         const btnText = document.getElementById('btn-text');
         const btnSpinner = document.getElementById('btn-spinner');
         const resultArea = document.getElementById('result-area');
+        
+        // Chat Elements
+        const chatSection = document.getElementById('chat-section');
+        const chatHistory = document.getElementById('chat-history');
+        const chatInput = document.getElementById('chat-input');
+        const sendChatBtn = document.getElementById('send-chat-btn');
+        
+        let currentContext = ""; 
 
-        // Fetch Namespaces
+        // 1. Fetch Namespaces
         fetch('/api/namespaces')
             .then(res => res.json())
             .then(data => {
-                if (data.error) return console.error(data.error);
+                if(data.error) return console.error(data.error);
                 data.forEach(ns => {
                     const opt = document.createElement('option');
                     opt.value = ns;
@@ -338,29 +384,105 @@ HTML = """
                     nsSelect.appendChild(opt);
                 });
             })
-            .catch(err => console.error(err));
+            .catch(console.error);
 
+        // 2. Handle Namespace Change
         nsSelect.addEventListener('change', () => {
+             const ns = nsSelect.value;
+             
+             // Reset downstream
+             typeSelect.value = "Pod"; 
+             typeSelect.disabled = !ns;
+             ctrlGroup.style.display = 'none';
+             ctrlSelect.innerHTML = '<option value="">Select Workload</option>';
+             podSelect.innerHTML = '<option value="">Select Pod</option>';
+             podSelect.disabled = true;
+             analyzeBtn.disabled = true;
+             chatSection.style.display = 'none';
+
+             if (ns) {
+                 // Default to listing all pods (Pod Mode)
+                 fetchPods(ns);
+             }
+        });
+
+        // 3. Handle Type Change
+        typeSelect.addEventListener('change', () => {
             const ns = nsSelect.value;
-            podSelect.innerHTML = '<option value="">Select Pod</option>';
-            podSelect.disabled = !ns;
-            analyzeBtn.disabled = true;
+            const type = typeSelect.value;
             
-            if (ns) {
-                fetch(`/api/pods/${ns}`)
+            ctrlSelect.innerHTML = '<option value="">Select Workload</option>';
+            podSelect.innerHTML = '<option value="">Select Pod</option>';
+            podSelect.disabled = true;
+            analyzeBtn.disabled = true;
+
+            if (type === 'Pod') {
+                ctrlGroup.style.display = 'none';
+                fetchPods(ns);
+            } else {
+                ctrlGroup.style.display = 'flex';
+                // Fetch Deployments or StatefulSets
+                const endpoint = type === 'Deployment' ? 'deployments' : 'statefulsets';
+                fetch(`/api/${endpoint}/${ns}`)
                     .then(res => res.json())
                     .then(data => {
-                        if (data.error) return console.error(data.error);
-                        data.forEach(pod => {
-                            const opt = document.createElement('option');
-                            opt.value = pod;
-                            opt.textContent = pod;
-                            podSelect.appendChild(opt);
-                        });
-                    })
-                    .catch(e => console.error(e));
+                         data.forEach(name => {
+                             const opt = document.createElement('option');
+                             opt.value = name;
+                             opt.textContent = name;
+                             ctrlSelect.appendChild(opt);
+                         });
+                    });
             }
         });
+
+        // 4. Handle Workload Selection (Deployment/STS)
+        ctrlSelect.addEventListener('change', () => {
+             const ns = nsSelect.value;
+             const type = typeSelect.value;
+             const name = ctrlSelect.value;
+             
+             podSelect.innerHTML = '<option value="">Select Pod</option>';
+             
+             if(name) {
+                 fetch('/api/pods_controller', {
+                     method: 'POST',
+                     headers: {'Content-Type': 'application/json'},
+                     body: JSON.stringify({ namespace: ns, kind: type, name: name })
+                 })
+                 .then(res => res.json())
+                 .then(data => {
+                     if(data.length === 0) {
+                         const opt = document.createElement('option');
+                         opt.textContent = "No pods found";
+                         podSelect.appendChild(opt);
+                     } else {
+                         data.forEach(pod => {
+                             const opt = document.createElement('option');
+                             opt.value = pod;
+                             opt.textContent = pod;
+                             podSelect.appendChild(opt);
+                         });
+                         podSelect.disabled = false;
+                     }
+                 });
+             }
+        });
+
+        // Helper: Fetch all pods (Default behavior)
+        function fetchPods(ns) {
+            fetch(`/api/pods/${ns}`)
+                .then(res => res.json())
+                .then(data => {
+                    data.forEach(pod => {
+                        const opt = document.createElement('option');
+                        opt.value = pod;
+                        opt.textContent = pod;
+                        podSelect.appendChild(opt);
+                    });
+                    podSelect.disabled = false;
+                });
+        }
 
         podSelect.addEventListener('change', () => {
             analyzeBtn.disabled = !podSelect.value;
@@ -375,6 +497,8 @@ HTML = """
             btnSpinner.style.display = 'block';
             analyzeBtn.disabled = true;
             resultArea.style.opacity = '0.5';
+            chatSection.style.display = 'none';
+            chatHistory.innerHTML = ''; // Clear previous chat
 
             fetch('/analyze', {
                 method: 'POST',
@@ -387,7 +511,98 @@ HTML = """
                 resultArea.style.opacity = '1';
                 
                 if (data.result) {
+                    currentContext = data.full_context; // Save context for chat
                     resultArea.innerHTML = marked.parse(data.result);
+                    
+                    // Add Copy Buttons
+                    document.querySelectorAll('pre code').forEach((block) => {
+                         const button = document.createElement('button');
+                         button.innerText = 'Copy';
+                         button.className = 'copy-btn';
+                         button.style.cssText = 'float:right; padding:2px 8px; font-size:12px; cursor:pointer; background:#2563eb; color:white; border:none; border-radius:4px; margin-left:10px;';
+                         button.addEventListener('click', () => {
+                             navigator.clipboard.writeText(block.innerText).then(() => {
+                                 button.innerText = 'Copied!';
+                                 setTimeout(() => button.innerText = 'Copy', 2000);
+                             });
+                         });
+                         const pre = block.parentNode;
+                         pre.insertBefore(button, pre.firstChild);
+                    });
+
+                    // Add Download Button
+                    if (!document.getElementById('download-btn')) {
+                         const btnContainer = document.createElement('div');
+                         btnContainer.style.marginTop = '1rem';
+                         btnContainer.style.display = 'flex';
+                         btnContainer.style.gap = '1rem';
+
+                         // Download Button
+                         const dlBtn = document.createElement('button');
+                         dlBtn.id = 'download-btn';
+                         dlBtn.innerText = '📄 Download Report';
+                         dlBtn.className = 'btn-primary';
+                         dlBtn.style.backgroundColor = '#10b981'; 
+                         dlBtn.style.width = 'auto'; 
+                         dlBtn.style.margin = '0';
+                         
+                         dlBtn.onclick = () => {
+                             const blob = new Blob([data.result], { type: 'text/markdown' });
+                             const url = window.URL.createObjectURL(blob);
+                             const a = document.createElement('a');
+                             a.href = url;
+                             a.download = `analysis-${pod}-${new Date().toISOString().slice(0,10)}.md`;
+                             document.body.appendChild(a);
+                             a.click();
+                             document.body.removeChild(a);
+                         };
+                         
+                         // Jira Button
+                         const jiraBtn = document.createElement('button');
+                         jiraBtn.id = 'jira-btn';
+                         jiraBtn.innerText = '🎫 Create Jira Ticket';
+                         jiraBtn.className = 'btn-primary';
+                         jiraBtn.style.backgroundColor = '#0052CC'; // Jira Blue
+                         jiraBtn.style.width = 'auto'; 
+                         jiraBtn.style.margin = '0';
+
+                         jiraBtn.onclick = () => {
+                             jiraBtn.disabled = true;
+                             jiraBtn.innerText = 'Creating...';
+                             
+                             fetch('/api/create_jira', {
+                                 method: 'POST',
+                                 headers: {'Content-Type': 'application/json'},
+                                 body: JSON.stringify({
+                                     summary: `[AI Analysis] Incident in pod ${pod}`,
+                                     description: data.result,
+                                     pod: pod
+                                 })
+                             })
+                             .then(res => res.json())
+                             .then(j => {
+                                 if(j.ticket_url) {
+                                     jiraBtn.innerText = 'Ticket Created ↗';
+                                     jiraBtn.onclick = () => window.open(j.ticket_url, '_blank');
+                                     alert(`Ticket ${j.key} created successfully!`);
+                                 } else {
+                                     jiraBtn.innerText = 'Failed';
+                                     alert('Error creating ticket: ' + j.error);
+                                 }
+                             })
+                             .catch(e => {
+                                 console.error(e);
+                                 jiraBtn.innerText = 'Error';
+                             });
+                         };
+
+                         btnContainer.appendChild(dlBtn);
+                         btnContainer.appendChild(jiraBtn);
+                         resultArea.appendChild(btnContainer);
+                    }
+
+                    // Show Chat Section
+                    chatSection.style.display = 'block';
                     resultArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 } else {
                     resultArea.innerHTML = `<h3 style="color:#ef4444;">Analysis Failed</h3><p>${data.error || "Unknown error"}</p>`;
@@ -398,16 +613,406 @@ HTML = """
                 resultArea.innerHTML = `<h3 style="color:#ef4444;">Network Error</h3><p>${err.message}</p>`;
             })
             .finally(() => {
-                // Reset Loading State
                 btnText.textContent = 'Analyze Issue';
                 btnSpinner.style.display = 'none';
                 analyzeBtn.disabled = false;
             });
         });
+
+        // Chat Logic
+        sendChatBtn.addEventListener('click', () => {
+             const question = chatInput.value.trim();
+             if (!question) return;
+
+             // Add User Message
+             const userMsg = document.createElement('div');
+             userMsg.innerHTML = `<strong>You:</strong> ${question}`;
+             userMsg.style.marginBottom = '0.5rem';
+             userMsg.style.color = '#2563eb';
+             chatHistory.appendChild(userMsg);
+             
+             chatInput.value = '';
+             sendChatBtn.disabled = true;
+             sendChatBtn.textContent = '...';
+
+             fetch('/chat', {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ context: currentContext, question: question })
+             })
+             .then(res => res.json())
+             .then(data => {
+                 const aiMsg = document.createElement('div');
+                 aiMsg.innerHTML = `<strong>AI:</strong> ${marked.parse(data.response)}`;
+                 aiMsg.style.marginBottom = '1rem';
+                 aiMsg.style.padding = '0.5rem';
+                 aiMsg.style.background = 'white';
+                 aiMsg.style.borderRadius = '0.5rem';
+                 chatHistory.appendChild(aiMsg);
+                 chatHistory.scrollTop = chatHistory.scrollHeight;
+             })
+             .catch(console.error)
+             .finally(() => {
+                 sendChatBtn.disabled = false;
+                 sendChatBtn.textContent = 'Send';ls
+             });
+        });
     </script>
 </body>
 </html>
 """
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    return render_template_string(HTML)
+
+@app.route("/api/namespaces", methods=["GET"])
+def get_namespaces():
+    try:
+        namespaces = v1.list_namespace()
+        return jsonify([ns.metadata.name for ns in namespaces.items])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/pods/<namespace>", methods=["GET"])
+def get_pods(namespace):
+    try:
+        pods = v1.list_namespaced_pod(namespace)
+        return jsonify([pod.metadata.name for pod in pods.items])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/deployments/<namespace>", methods=["GET"])
+def get_deployments(namespace):
+    try:
+        apps_v1 = client.AppsV1Api()
+        deps = apps_v1.list_namespaced_deployment(namespace)
+        return jsonify([d.metadata.name for d in deps.items])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/statefulsets/<namespace>", methods=["GET"])
+def get_statefulsets(namespace):
+    try:
+        apps_v1 = client.AppsV1Api()
+        sts = apps_v1.list_namespaced_stateful_set(namespace)
+        return jsonify([s.metadata.name for s in sts.items])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/pods_controller", methods=["POST"])
+def get_pods_controller():
+    # Fetch pods belonging to a controller via MatchLabels
+    data = request.json
+    ns = data.get('namespace')
+    kind = data.get('kind') # Deployment, StatefulSet, Pods
+    name = data.get('name')
+
+    if kind == "Pod":
+        # logic handled by normal pod list, but if this is called with "Pod", we just return empty or handle differently
+        return jsonify([])
+
+    try:
+        apps_v1 = client.AppsV1Api()
+        labels = {}
+        
+        if kind == 'Deployment':
+            c = apps_v1.read_namespaced_deployment(name, ns)
+            labels = c.spec.selector.match_labels
+        elif kind == 'StatefulSet':
+            c = apps_v1.read_namespaced_stateful_set(name, ns)
+            labels = c.spec.selector.match_labels
+        
+        if not labels:
+             return jsonify([])
+
+        selector = ",".join([f"{k}={v}" for k, v in labels.items()])
+        pods = v1.list_namespaced_pod(ns, label_selector=selector)
+        
+        return jsonify([p.metadata.name for p in pods.items])
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/create_jira", methods=["POST"])
+def create_jira():
+    data = request.json
+    summary = data.get('summary')
+    description = data.get('description')
+    
+    # Load Credentials from Environment
+    JIRA_DOMAIN = os.getenv("JIRA_DOMAIN")
+    EMAIL = os.getenv("JIRA_EMAIL")
+    API_TOKEN = os.getenv("JIRA_API_TOKEN")
+    PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY")
+
+    if not all([JIRA_DOMAIN, EMAIL, API_TOKEN, PROJECT_KEY]):
+        return jsonify({"error": "Jira credentials not configured in Pod Environment"}), 500
+
+    url = f"https://{JIRA_DOMAIN}/rest/api/3/issue"
+    auth = (EMAIL, API_TOKEN)
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    
+    # Jira Cloud Document Format (Required for 'description')
+    # Use a simple ADF structure
+    adf_description = {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": description[:3000] # Truncate to avoid payload limits
+                    }
+                ]
+            }
+        ]
+    }
+
+    payload = {
+        "fields": {
+           "project": {"key": PROJECT_KEY},
+           "summary": summary,
+           "description": adf_description, 
+           "issuetype": {"name": "Bug"}
+       }
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, auth=auth)
+        if response.status_code == 201:
+            ticket = response.json()
+            return jsonify({
+                "key": ticket['key'],
+                "ticket_url": f"https://{JIRA_DOMAIN}/browse/{ticket['key']}",
+                "message": "Ticket created successfully"
+            })
+        else:
+            return jsonify({"error": f"Jira API Error: {response.text}"}), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    data = request.json
+    context = data.get("context", "")
+    question = data.get("question", "")
+    
+    prompt = f"""
+You are a Kubernetes Expert Assistant. 
+Here is the context of the pod issue we analyzed:
+{context}
+
+USER QUESTION: {question}
+
+Provide a helpful, technical answer. If code is needed, use code blocks.
+"""
+    try:
+        r = requests.post(OLLAMA_URL, json={
+            "model": "llama3",
+            "prompt": prompt,
+            "stream": False
+        }, timeout=120)
+        
+        return jsonify({"response": r.json().get("response", "Error")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    data = request.json
+    ns = data.get("namespace")
+    pod = data.get("pod")
+
+    if not ns or not pod:
+        return jsonify({"error": "Missing namespace or pod"}), 400
+
+    try:
+        pod_obj = v1.read_namespaced_pod(pod, ns)
+        
+        # Events
+        events = v1.list_namespaced_event(ns, field_selector=f"involvedObject.name={pod}")
+        event_log = "\n".join([f"- [{e.type}] {e.reason}: {e.message}" for e in events.items])
+
+        # Logs
+        try:
+            logs = v1.read_namespaced_pod_log(pod, ns, tail_lines=50)
+        except Exception:
+            logs = "Logs unavailable."
+
+        # Diagnostics & Metrics
+        diagnostics = []
+        metrics_info = ""
+        
+        # METRICS (New Feature)
+        try:
+            # Attempt to fetch from Metrics Server
+            custom_api = client.CustomObjectsApi()
+            pod_metrics = custom_api.get_namespaced_custom_object(
+                group="metrics.k8s.io", version="v1beta1", namespace=ns, plural="pods", name=pod
+            )
+            containers_usage = pod_metrics.get('containers', [])
+            metrics_info = "\nLIVE METRICS:\n"
+            for c in containers_usage:
+                metrics_info += f"- Container '{c['name']}': CPU={c['usage']['cpu']}, Ram={c['usage']['memory']}\n"
+        except Exception:
+            metrics_info = "\nLIVE METRICS: Metrics Server not available or pod not running.\n"
+
+        resource_issues = []
+        for c in pod_obj.spec.containers:
+            limits = c.resources.limits or {}
+            requests_res = c.resources.requests or {}
+            if not limits:
+                 resource_issues.append(f"Container '{c.name}' has NO resource limits defined.")
+            if not requests_res:
+                 resource_issues.append(f"Container '{c.name}' has NO resource requests defined.")
+        
+        if resource_issues:
+            context_resources = "\nCONFIGURATION WARNINGS:\n" + "\n".join(resource_issues)
+        else:
+            context_resources = "\nResources: Configured correctly."
+
+        # Status Checks
+        for cand in pod_obj.status.conditions or []:
+            if cand.type == "PodScheduled" and cand.status == "False":
+                diagnostics.append(f"SCHEDULING ERROR: {cand.message}")
+        
+        if pod_obj.status.init_container_statuses:
+            for c in pod_obj.status.init_container_statuses:
+                if not c.ready:
+                    state_reason = c.state.waiting.reason if c.state.waiting else (c.state.terminated.reason if c.state.terminated else "Unknown")
+                    diagnostics.append(f"INIT CONTAINER '{c.name}' FAILED. State: {state_reason}")
+
+        if pod_obj.status.container_statuses:
+            for c in pod_obj.status.container_statuses:
+                if not c.ready:
+                    if c.state.waiting:
+                         diagnostics.append(f"CONTAINER '{c.name}' WAITING. Reason: {c.state.waiting.reason}")
+                    elif c.state.terminated:
+                         diagnostics.append(f"CONTAINER '{c.name}' TERMINATED. Exit Code: {c.state.terminated.exit_code}. Reason: {c.state.terminated.reason}")
+        
+        # Determine Context
+        is_healthy = False
+        if pod_obj.status.phase == "Running":
+             # Check if all containers are actually ready
+             all_ready = True
+             if pod_obj.status.container_statuses:
+                 for c in pod_obj.status.container_statuses:
+                     if not c.ready:
+                         all_ready = False
+                         break
+             if all_ready and not diagnostics:
+                 is_healthy = True
+
+        log_is_critical = False
+        if isinstance(logs, str) and any(x in logs.lower() for x in ["error", "exception", "fatal", "invalid", "panic"]):
+            log_is_critical = True
+
+        # If logs have critical errors, suppress the generic resource warnings to keep AI focused
+        if log_is_critical:
+            context_resources = "" 
+        
+        if is_healthy:
+            context = "The Pod is in a RUNNING state and appears healthy." + context_resources + metrics_info
+        elif pod_obj.status.phase == "Pending":
+            context = "The Pod is PENDING. " + context_resources
+        else:
+            context = "CRITICAL ISSUES FOUND:\n" + "\n".join(diagnostics) + context_resources + metrics_info
+        
+        full_context_str = f"Context: {context}\nEvents: {event_log}\nLogs: {logs}"
+
+        # Define Prompts based on health
+        if is_healthy:
+            # HEALTHY POD TEMPLATE
+            prompt = f"""
+You are an expert Kubernetes SRE. Perform a health check.
+
+DETAILS:
+Namespace: {ns}
+Pod: {pod}
+Status Phase: {pod_obj.status.phase}
+
+CONTEXT:
+{context}
+
+EVENTS:
+{event_log}
+
+LOGS:
+{logs}
+
+STRICT INSTRUCTIONS:
+You must provide the report in the EXACT following Markdown format. Do not add introductions.
+
+# ✅ Health Status
+[Confirm the healthy status in 1 sentence]
+
+# 📊 Live Diagnostics & Metrics
+[Bullet points on image status, restarts, and live CPU/Memory if available]
+
+# 🔎 Log Patterns 
+[Analyze any INFO/WARN logs]
+
+# 💡 Optimization Tip
+[One best practice tip]
+"""
+        else:
+            # FAILURE/ISSUE TEMPLATE
+            prompt = f"""
+You are an expert Kubernetes SRE. Analyze this pod failure.
+
+DETAILS:
+Namespace: {ns}
+Pod: {pod}
+Status Phase: {pod_obj.status.phase}
+
+DIAGNOSTIC CONTEXT:
+{context}
+
+EVENTS:
+{event_log}
+
+LOGS:
+{logs}
+
+STRICT INSTRUCTIONS:
+You must provide the analysis in the EXACT following Markdown format. Do not add introductions or conclusions.
+
+# 🚨 Root Cause Analysis
+[Look for EXPLICIT ERROR MESSAGES in the LOGS first. 
+- If "Connection refused" or "Timeout": Suspect Network/DB/Service not ready.
+- If "Access denied" or "Auth failed": Suspect Secrets/Passwords.
+- If "Invalid config": Suspect ConfigMap/Env Vars.
+State the exact error found as the primary root cause.]
+
+# 🔍 Technical Details
+[Bullet points explaining technical evidence. Quote specific log lines. Check if it's an Application Error vs Infrastructure Error.]
+
+# 🛠️ Actionable Fix
+[Specific kubectl commands or YAML changes to fix this. e.g. 'Check NetworkPolicy', 'Verify Secret credentials', 'Edit ConfigMap']
+
+# 📋 Prevention
+[One tip to prevent this specific issue]
+"""
+
+        r = requests.post(OLLAMA_URL, json={
+            "model": "llama3",
+            "prompt": prompt,
+            "stream": False
+        }, timeout=300)
+        
+        result = r.json().get("response", "No response from AI")
+        
+        return jsonify({"result": result, "full_context": full_context_str})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080, debug=True)
+
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -455,6 +1060,21 @@ def analyze():
         # 4. Comprehensive Status Analysis
         diagnostics = []
 
+        # Check Resources (Enterprise Best Practice Check)
+        resource_issues = []
+        for c in pod_obj.spec.containers:
+            limits = c.resources.limits or {}
+            requests_res = c.resources.requests or {}
+            if not limits:
+                 resource_issues.append(f"Container '{c.name}' has NO resource limits defined (Security Risk).")
+            if not requests_res:
+                 resource_issues.append(f"Container '{c.name}' has NO resource requests defined (Scheduler Blindness).")
+        
+        if resource_issues:
+            context_resources = "\nCONFIGURATION WARNINGS:\n" + "\n".join(resource_issues)
+        else:
+            context_resources = "\nResources: Configured correctly (Limits/Requests present)."
+
         # Check Node Scheduling (Pending state context)
         for cand in pod_obj.status.conditions or []:
             if cand.type == "PodScheduled" and cand.status == "False":
@@ -478,13 +1098,53 @@ def analyze():
         
         # Determine Context
         if not diagnostics and pod_obj.status.phase == "Running":
-            context = "The Pod is in a RUNNING state and appears healthy."
+            context = "The Pod is in a RUNNING state and appears healthy." + context_resources
         elif not diagnostics and pod_obj.status.phase == "Pending":
-            context = "The Pod is PENDING but no specific container failure found. Likely waiting for resources or scheduling."
+            context = "The Pod is PENDING. " + context_resources
         else:
-            context = "CRITICAL ISSUES FOUND:\n" + "\n".join(diagnostics)
+            context = "CRITICAL ISSUES FOUND:\n" + "\n".join(diagnostics) + context_resources
 
-        prompt = f"""
+        # Define Prompts based on health
+        if not diagnostics and pod_obj.status.phase == "Running":
+            # HEALTHY POD TEMPLATE
+            prompt = f"""
+You are an expert Kubernetes SRE. Perform a health check on this running pod.
+
+DETAILS:
+Namespace: {ns}
+Pod: {pod}
+Status Phase: {pod_obj.status.phase}
+
+CONTEXT:
+{context}
+
+EVENTS:
+{event_log}
+
+LOGS:
+{logs}
+
+STRICT INSTRUCTIONS:
+You must provide the report in the EXACT following Markdown format. Do not add introductions.
+
+# ✅ Health Status
+[Confirm the healthy status in 1 sentence, e.g. "The pod is healthy and operating normally."]
+
+# 📊 Live Diagnostics
+[Bullet points confirming:
+- Image pull status
+- Container readiness
+- Any recent restarts (if any)]
+
+# 🔎 Log Patterns 
+[Analyze any INFO/WARN logs. If logs are clean, state "No anomalies detected in application logs."]
+
+# 💡 Optimization Tip
+[One general best practice tip for this type of workload (e.g. resource limits, liveness probes)]
+"""
+        else:
+            # FAILURE/ISSUE TEMPLATE
+            prompt = f"""
 You are an expert Kubernetes SRE. Analyze this pod failure.
 
 DETAILS:
@@ -508,19 +1168,18 @@ You must provide the analysis in the EXACT following Markdown format. Do not add
 [Explain precisely what caused the failure in 1-2 sentences]
 
 # 🔍 Technical Details
-[Bullet points explaining the technical evidence from logs/events]
+[Bullet points explaining the technical evidence from logs/events, e.g. "Exit Code 137 indicates OOMKilled", "401 Unauthorized in logs"]
 
 # 🛠️ Actionable Fix
 [Specific kubectl commands or YAML changes to fix this]
 
 # 📋 Prevention
 [One tip to prevent this in future]
-
 """
 
         r = requests.post(OLLAMA_URL, json={
-            # "model": "llama3",
-            "model": "phi3",
+            "model": "llama3",
+            # "model": "phi3",
             "prompt": prompt,
             "stream": False
         }, timeout=300)

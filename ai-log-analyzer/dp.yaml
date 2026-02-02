@@ -16,9 +16,18 @@ spec:
       serviceAccountName: ai-log-analyzer
       containers:
         - name: ai
-          image: ai-log-analyzer:v3.5
+          image: ai-log-analyzer:v5.3
           ports:
             - containerPort: 8080
+          env:
+            - name: JIRA_DOMAIN
+              value: "ajitdevops.atlassian.net"
+            - name: JIRA_EMAIL
+              value: "ajit.bolt@gmail.com"
+            - name: JIRA_API_TOKEN
+              value: "<change-me>"
+            - name: JIRA_PROJECT_KEY
+              value: "KAN"
 
 ---
 apiVersion: v1

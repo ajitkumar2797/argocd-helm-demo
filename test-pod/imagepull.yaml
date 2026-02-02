@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-pull-demo
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: image-pull-demo
+  template:
+    metadata:
+      labels:
+        app: image-pull-demo
+    spec:
+      containers:
+        - name: image-pull-demo
+          image: nonexistent-registry/definitely-not-an-image:latest
+

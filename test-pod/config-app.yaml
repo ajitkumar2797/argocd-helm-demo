@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-config
+  namespace: dev
+data:
+  MODE: "crash"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-app
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-app
+  template:
+    metadata:
+      labels:
+        app: config-app
+    spec:
+      containers:
+        - name: config-app
+          image: busybox
+          envFrom:
+            - configMapRef:
+                name: configmap-config
+          command:
+            - sh
+            - -c
+            - |
+              echo "MODE=$MODE"
+              if [ "$MODE" = "crash" ]; then
+                echo "Invalid config detected"
+                exit 1
+              fi
+              sleep 3600

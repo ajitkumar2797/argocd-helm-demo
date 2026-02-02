@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbcrash-app
+  namespace: dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dbcrash-app
+  template:
+    metadata:
+      labels:
+        app: dbcrash-app
+    spec:
+      containers:
+      - name: app
+        image: python:3.11-slim
+        command:
+          - sh
+          - -c
+          - |
+            echo "Starting app..."
+            sleep 2
+            echo "Connecting to database..."
+            sleep 1
+            echo "ERROR: Database connection failed: timeout"
+            echo "Traceback (most recent call last):"
+            echo "  File \"app.py\", line 42, in <module>"
+            echo "    connect_db()"
+            echo "Exception: DBConnectionError"
+            exit 1
+
